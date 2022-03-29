@@ -13,8 +13,20 @@ def get_latest_data_as_df():
     res = requests.get('https://www.taipower.com.tw/d006/loadGraph/loadGraph/data/reserve.csv')
 
     from io import StringIO
-    data_csv = StringIO(res.text)
-    df = pd.read_csv(data_csv)
+    # Add column names.
+    raw_csv = '日期,瞬時尖峰負載(萬瓦),備轉容量(萬瓦),備轉容量率(%)\n' + res.text
+    data_csv = StringIO(raw_csv)
+    df = pd.read_csv(data_csv).dropna()
+
+    # Chage date format from 1/2 to 20220102.
+    df['日期'] = pd.date_range(start='20220101', periods=len(df)).strftime('%Y%m%d').astype(int)
+
+    # Set date as index.
+    df = df.set_index('日期')
+
+    # Round to int.
+    df = df['備轉容量(萬瓦)'].apply(lambda x: x*10).astype(int)
+
     return df
 
 def split_train_test(data: pd.DataFrame, start: str, end: str, include=True):
@@ -26,17 +38,25 @@ def split_train_test(data: pd.DataFrame, start: str, end: str, include=True):
     # Some parameters.
     day_ahead = 2
 
+    # Select features.
     interested = data['備轉容量(MW)']
 
+    # Get additional data.
+    df = get_latest_data_as_df()
+
+    # Combine additional data and training data.
+    interested = pd.concat([interested.loc[:'20211231'], df])
+
+    # Shift the data.
     shifts = np.arange(1, day_ahead + 1).astype(int)
     shifted_data = {f'lag_{day_shift}_day': interested.shift(day_shift) for day_shift in shifts}
-
     interested_shifted = pd.DataFrame(shifted_data)
 
     # Replace NaN with median.
     interested_shifted = interested_shifted.fillna(np.nanmedian(interested_shifted))
     interested = interested.fillna(np.nanmedian(interested))
 
+    # Calculate start and end date of training data.
     one_day = timedelta(days=1)
     fmt = '%Y%m%d'
     train_end = (datetime.strptime(start, fmt) - one_day).strftime(fmt)
@@ -51,7 +71,7 @@ def split_train_test(data: pd.DataFrame, start: str, end: str, include=True):
     y_train = interested.loc[:train_end]
     x_test = interested_shifted.loc[start:test_end]
     y_test = interested.loc[start:test_end]
-        
+
     return x_train, y_train, x_test, y_test
 
 
@@ -79,16 +99,11 @@ if __name__ == '__main__':
         start = '20220330'
         end = '20220413'
     else:
-        start = '20220101'
-        end = '20220116'
+        start = '20220310'
+        end = '20220325'
 
     # Load training data.
     data = pd.read_csv(args.training, index_col=0)
-
-    # # TODO: Get current data.
-    # df = get_latest_data_as_df()
-
-    # TODO: Combine new data and training data.
 
     # Split the data into training and testing.
     x_train, y_train, x_test, y_test = split_train_test(data, start=start, end=end)
